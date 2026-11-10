@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiActivity, FiCheck, FiMoon, FiPause, FiPlay, FiRotateCcw, FiTrash2, FiWind } from "react-icons/fi";
 import ConfirmDialog from "../confirmDialog";
 import styles from "./styles.module.css";
@@ -21,7 +21,29 @@ const breathStyles = {
 const dateKey = (date) => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
 const shiftDate = (value, offset) => { const date = new Date(value + "T12:00:00"); date.setDate(date.getDate() + offset); return dateKey(date); };
 const formatDay = (value, options = { weekday: "short" }) => new Intl.DateTimeFormat("en", options).format(new Date(value + "T12:00:00"));
-const readSessions = () => { try { const saved = localStorage.getItem(storageKey); return saved ? JSON.parse(saved) : []; } catch { return []; } };
+const readSessions = () => {
+    try {
+        const saved = JSON.parse(localStorage.getItem(storageKey));
+        if (!Array.isArray(saved)) return [];
+        return saved.filter((session) => session && typeof session === "object"
+            && typeof session.id === "string"
+            && /^\d{4}-\d{2}-\d{2}$/.test(session.date)
+            && Number.isFinite(session.minutes) && session.minutes > 0
+            && typeof session.finishedAt === "string");
+    } catch {
+        return [];
+    }
+};
+const canUseStorage = () => {
+    try {
+        const probeKey = `quiet-hours-storage-probe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(probeKey, "1");
+        localStorage.removeItem(probeKey);
+        return true;
+    } catch {
+        return false;
+    }
+};
 const id = () => globalThis.crypto?.randomUUID?.() ?? String(Date.now());
 const formatClock = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 const phaseFor = (seconds, duration, name) => {
@@ -43,24 +65,42 @@ const MeditationTimer = () => {
     const [isRunning, setIsRunning] = useState(false);
     const [isComplete, setIsComplete] = useState(false);
     const [sessions, setSessions] = useState(readSessions);
+    const [storageAvailable, setStorageAvailable] = useState(canUseStorage);
     const [pendingDelete, setPendingDelete] = useState(null);
+    const deadlineRef = useRef(null);
+    const completeSession = useCallback(() => {
+        deadlineRef.current = null;
+        remainingRef.current = 0;
+        setRemaining(0);
+        setIsRunning(false);
+        setIsComplete(true);
+        const finishedAt = new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date());
+        setSessions((current) => [{ id: id(), date: dateKey(new Date()), minutes: duration, finishedAt, breathStyle }, ...current]);
+    }, [duration, breathStyle]);
 
-    useEffect(() => localStorage.setItem(storageKey, JSON.stringify(sessions)), [sessions]);
+    useEffect(() => {
+        if (!storageAvailable) return;
+        try {
+            localStorage.setItem(storageKey, JSON.stringify(sessions));
+        } catch {
+            setStorageAvailable(false);
+        }
+    }, [sessions, storageAvailable]);
     useEffect(() => {
         if (!isRunning) return undefined;
+        const deadline = Date.now() + remainingRef.current * 1000;
+        deadlineRef.current = deadline;
         const interval = window.setInterval(() => {
-            const next = Math.max(0, remainingRef.current - 1);
-            remainingRef.current = next;
-            setRemaining(next);
-            if (next === 0) {
-                const finishedAt = new Intl.DateTimeFormat("en", { hour: "numeric", minute: "2-digit" }).format(new Date());
-                setIsRunning(false);
-                setIsComplete(true);
-                setSessions((current) => [{ id: id(), date: dateKey(new Date()), minutes: duration, finishedAt, breathStyle }, ...current]);
+            if (deadlineRef.current !== deadline) return;
+            const next = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+            if (next !== remainingRef.current) {
+                remainingRef.current = next;
+                setRemaining(next);
             }
-        }, 1000);
+            if (next === 0) completeSession();
+        }, 250);
         return () => window.clearInterval(interval);
-    }, [isRunning, duration, breathStyle]);
+    }, [isRunning, completeSession]);
 
     const today = dateKey(new Date());
     const week = Array.from({ length: 7 }, (_, index) => {
@@ -78,8 +118,17 @@ const MeditationTimer = () => {
         if (isComplete || remaining === 0) { remainingRef.current = duration * 60; setRemaining(duration * 60); setIsComplete(false); }
         setIsRunning(true);
     };
-    const reset = () => { remainingRef.current = duration * 60; setIsRunning(false); setIsComplete(false); setRemaining(duration * 60); };
-    const selectDuration = (value) => { remainingRef.current = value * 60; setDuration(value); setRemaining(value * 60); setIsRunning(false); setIsComplete(false); };
+    const pause = () => {
+        const deadline = deadlineRef.current;
+        const next = deadline ? Math.max(0, Math.ceil((deadline - Date.now()) / 1000)) : remainingRef.current;
+        if (next === 0) { completeSession(); return; }
+        deadlineRef.current = null;
+        remainingRef.current = next;
+        setRemaining(next);
+        setIsRunning(false);
+    };
+    const reset = () => { deadlineRef.current = null; remainingRef.current = duration * 60; setIsRunning(false); setIsComplete(false); setRemaining(duration * 60); };
+    const selectDuration = (value) => { deadlineRef.current = null; remainingRef.current = value * 60; setDuration(value); setRemaining(value * 60); setIsRunning(false); setIsComplete(false); };
     const removeSession = () => { setSessions((current) => current.filter((session) => session.id !== pendingDelete.id)); setPendingDelete(null); };
     const clearSessions = () => { setSessions([]); setPendingDelete(null); };
 
@@ -101,7 +150,7 @@ const MeditationTimer = () => {
                     <p className={styles.breathHint}>{isComplete ? "You made time for yourself. Let that be enough." : isRunning ? "Let your breath follow the gentle rhythm." : "Settle in. The next breath can wait."}</p>
                 </div>
                 <div className={styles.durationPicker}><span>SESSION LENGTH</span><div>{durationOptions.map((minutes) => <button key={minutes} type="button" disabled={isRunning} aria-pressed={duration === minutes} className={duration === minutes ? styles.selectedDuration : ""} onClick={() => selectDuration(minutes)}>{minutes}<small>min</small></button>)}</div></div>
-                <div className={styles.sessionControls}><label className={styles.breathSelect}><FiWind aria-hidden="true" /><span>Breathing rhythm</span><select value={breathStyle} disabled={isRunning} onChange={(event) => setBreathStyle(event.target.value)}>{Object.keys(breathStyles).map((style) => <option key={style}>{style}</option>)}</select></label><div className={styles.actionButtons}><button className={styles.startButton} type="button" onClick={isRunning ? () => setIsRunning(false) : startOrResume}>{isRunning ? <FiPause aria-hidden="true" /> : <FiPlay aria-hidden="true" />}{isRunning ? "Pause" : isComplete ? "Begin again" : remaining < duration * 60 ? "Resume" : "Begin session"}</button><button className={styles.resetButton} type="button" aria-label="Reset timer" onClick={reset}><FiRotateCcw aria-hidden="true" /></button></div></div>
+                <div className={styles.sessionControls}><label className={styles.breathSelect}><FiWind aria-hidden="true" /><span>Breathing rhythm</span><select value={breathStyle} disabled={isRunning} onChange={(event) => setBreathStyle(event.target.value)}>{Object.keys(breathStyles).map((style) => <option key={style}>{style}</option>)}</select></label><div className={styles.actionButtons}><button className={styles.startButton} type="button" onClick={isRunning ? pause : startOrResume}>{isRunning ? <FiPause aria-hidden="true" /> : <FiPlay aria-hidden="true" />}{isRunning ? "Pause" : isComplete ? "Begin again" : remaining < duration * 60 ? "Resume" : "Begin session"}</button><button className={styles.resetButton} type="button" aria-label="Reset timer" onClick={reset}><FiRotateCcw aria-hidden="true" /></button></div></div>
             </section>
 
             <aside className={styles.practiceCard} id="practice-log" aria-labelledby="practice-title">
@@ -111,7 +160,7 @@ const MeditationTimer = () => {
                     {week.map((day) => <div className={styles.dayBar} key={day.date}><span>{day.minutes ? day.minutes + "m" : ""}</span><i style={{ height: `${Math.max(day.minutes ? 8 : 0, day.minutes / chartMax * 100)}%` }} /><small>{day.label}</small></div>)}
                 </div>
                 <div className={styles.todayNote}><span>Today</span><strong>{todayMinutes} min</strong><small>{todayMinutes ? "A lovely bit of space." : "A fresh page, whenever you're ready."}</small></div>
-                <div className={styles.historyHeading}><div><h3>Recent sessions</h3><span>Saved on this device</span></div>{sessions.length > 0 && <button type="button" onClick={() => setPendingDelete({ all: true })}>Clear all</button>}</div>
+                <div className={styles.historyHeading}><div><h3>Recent sessions</h3><span>{storageAvailable ? "Saved on this device" : "Session only · storage unavailable"}</span></div>{sessions.length > 0 && <button type="button" onClick={() => setPendingDelete({ all: true })}>Clear all</button>}</div>
                 <ul className={styles.sessionList}>{sessions.slice(0, 4).map((session) => <li key={session.id}><span className={styles.sessionDot}><FiCheck aria-hidden="true" /></span><div><strong>{session.minutes} minute pause</strong><small>{formatDay(session.date, { month: "short", day: "numeric" })} · {session.finishedAt}</small></div><button type="button" aria-label={`Remove ${session.minutes} minute session`} onClick={() => setPendingDelete(session)}><FiTrash2 aria-hidden="true" /></button></li>)}{sessions.length === 0 && <li className={styles.emptyHistory}><span className={styles.emptyMoon}>☾</span><p>Your practice will gather here, one pause at a time.</p></li>}</ul>
             </aside>
         </div>

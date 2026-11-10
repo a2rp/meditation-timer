@@ -21,11 +21,11 @@ Choose a session length and breathing rhythm, then begin. The circle fills as ti
 
 ## Data and privacy
 
-Completed sessions are saved in local storage in this browser. The app does not send session details to a server. Clearing browser site data removes the saved log. This timer is a general wellness tool and does not provide medical or mental health advice.
+Completed sessions are saved in local storage in this browser. If browser storage is unavailable, the timer still works and session history lasts for the current page session. The app does not send session details to a server. Clearing browser site data removes the saved log. This timer is a general wellness tool and does not provide medical or mental health advice.
 
 ## Run and check locally
 
-Install dependencies with `npm install`, then start the Vite development server with `npm run dev`. Run `npm run lint` for ESLint and `npm run build` for a production build. Run `npm run deploy` to publish the `dist` folder to the `gh-pages` branch.
+Install dependencies with `npm ci`, then start the Vite development server with `npm run dev`. Run `npm run lint` for ESLint and `npm run build` for a production build. Run `npm run deploy` to publish the `dist` folder to the `gh-pages` branch.
 
 ## Future improvements
 
